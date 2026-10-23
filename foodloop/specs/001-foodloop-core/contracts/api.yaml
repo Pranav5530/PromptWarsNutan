@@ -1,0 +1,243 @@
+openapi: 3.1.0
+info:
+  title: FoodLoop Multi-Agent Core API
+  version: 1.0.0
+  description: Backend FastAPI service orchestrating Intake, Safety, Matching, Logistics, and BigQuery analytics for food surplus rescue.
+servers:
+  - url: https://api-foodloop-cloudrun.a.run.app/api/v1
+    description: Cloud Run Production
+  - url: http://localhost:8000/api/v1
+    description: Local Dev Server
+
+paths:
+  /auth/verify:
+    post:
+      summary: Verify Firebase JWT and issue custom role claims
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: User profile with role
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserProfile'
+
+  /agent/intake:
+    post:
+      summary: Multimodal food listing extraction (photo/audio)
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                image:
+                  type: string
+                  format: binary
+                audio:
+                  type: string
+                  format: binary
+                donor_notes:
+                  type: string
+                donor_location:
+                  type: string
+      responses:
+        '200':
+          description: Extracted structured draft
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FoodIntakeDraft'
+
+  /agent/safety-check:
+    post:
+      summary: Deterministic safety rules and Gemini reasoning
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FoodListingCreate'
+      responses:
+        '200':
+          description: Safety evaluation verdict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SafetyEvaluation'
+
+  /agent/match:
+    post:
+      summary: Rank nearby NGOs and return match recommendation
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                listing_id:
+                  type: string
+      responses:
+        '200':
+          description: Ranked NGO candidates with reasoning
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MatchResult'
+
+  /agent/dispatch:
+    post:
+      summary: Assign nearest volunteer and calculate route/ETA
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                listing_id:
+                  type: string
+                ngo_id:
+                  type: string
+      responses:
+        '200':
+          description: Dispatch record with volunteer and routing
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DispatchRecord'
+
+  /analytics/impact:
+    get:
+      summary: Real-time aggregated impact metrics from BigQuery/Firestore
+      responses:
+        '200':
+          description: High-level impact KPIs
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ImpactMetrics'
+
+  /analytics/forecast:
+    get:
+      summary: Surplus hotspot predictions by hour and area
+      responses:
+        '200':
+          description: Forecasted hotspot areas
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SurplusHotspot'
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    UserProfile:
+      type: object
+      required: [id, email, role, display_name]
+      properties:
+        id: { type: string }
+        email: { type: string }
+        role: { type: string, enum: [donor, ngo, volunteer, admin] }
+        display_name: { type: string }
+        phone_masked: { type: string }
+
+    FoodIntakeDraft:
+      type: object
+      required: [food_name, category, estimated_kg, meal_count, dietary_type, allergens, safe_consume_hours]
+      properties:
+        food_name: { type: string }
+        category: { type: string, enum: [cooked_meal, bakery, raw_produce, packaged] }
+        estimated_kg: { type: number }
+        meal_count: { type: integer }
+        dietary_type: { type: string, enum: [vegetarian, vegan, non_vegetarian, jain] }
+        allergens:
+          type: array
+          items: { type: string }
+        safe_consume_hours: { type: integer }
+        confidence_score: { type: number }
+
+    FoodListingCreate:
+      type: object
+      required: [donor_id, food_name, estimated_kg, prep_timestamp, storage_condition]
+      properties:
+        donor_id: { type: string }
+        food_name: { type: string }
+        estimated_kg: { type: number }
+        prep_timestamp: { type: string, format: date-time }
+        storage_condition: { type: string, enum: [hot_held, room_temp, refrigerated] }
+        ambient_temp_celsius: { type: number }
+
+    SafetyEvaluation:
+      type: object
+      required: [verdict, rule_violations, ai_explanation]
+      properties:
+        verdict: { type: string, enum: [Safe, Risky, Rejected] }
+        rule_violations:
+          type: array
+          items: { type: string }
+        ai_explanation: { type: string }
+        fssai_window_hours: { type: number }
+
+    MatchResult:
+      type: object
+      required: [listing_id, ranked_candidates]
+      properties:
+        listing_id: { type: string }
+        ranked_candidates:
+          type: array
+          items:
+            type: object
+            properties:
+              ngo_id: { type: string }
+              ngo_name: { type: string }
+              score: { type: number }
+              distance_km: { type: number }
+              capacity_match: { type: boolean }
+              reasoning: { type: string }
+
+    DispatchRecord:
+      type: object
+      required: [dispatch_id, volunteer_id, eta_minutes, directions_url]
+      properties:
+        dispatch_id: { type: string }
+        volunteer_id: { type: string }
+        volunteer_name: { type: string }
+        eta_minutes: { type: integer }
+        directions_url: { type: string }
+        status: { type: string }
+
+    ImpactMetrics:
+      type: object
+      properties:
+        total_kg_rescued: { type: number }
+        total_meals_served: { type: integer }
+        co2_saved_kg: { type: number }
+        avg_match_time_sec: { type: number }
+        active_rescues: { type: integer }
+
+    SurplusHotspot:
+      type: object
+      properties:
+        area_name: { type: string }
+        peak_hour: { type: string }
+        predicted_kg: { type: number }
+        active_donor_count: { type: integer }

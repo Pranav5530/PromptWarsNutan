@@ -1,0 +1,84 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function hasRole(role) {
+      return isAuthenticated() && request.auth.token.role == role;
+    }
+    
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return hasRole('admin');
+    }
+
+    // User profiles
+    match /users/{userId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && isOwner(userId);
+      allow update: if isOwner(userId) || isAdmin();
+      allow delete: if isAdmin();
+
+      // Restricted private subcollection (Raw phone, bank/identity details)
+      match /private/security {
+        allow read, write: if isOwner(userId) || isAdmin();
+      }
+    }
+
+    // NGO profiles
+    match /ngos/{ngoId} {
+      allow read: if isAuthenticated();
+      allow write: if hasRole('ngo') && isOwner(ngoId) || isAdmin();
+    }
+
+    // Volunteer profiles
+    match /volunteers/{volunteerId} {
+      allow read: if isAuthenticated();
+      allow write: if hasRole('volunteer') && isOwner(volunteerId) || isAdmin();
+    }
+
+    // Food listings
+    match /listings/{listingId} {
+      allow read: if isAuthenticated();
+      allow create: if hasRole('donor') && request.resource.data.donorId == request.auth.uid;
+      // Donors can update their draft listings, but cannot tamper with safetyStatus or matchedNgoId
+      allow update: if (hasRole('donor') && resource.data.donorId == request.auth.uid &&
+                        !request.resource.data.diff(resource.data).affectedKeys().hasAny(['safetyStatus', 'matchedNgoId']))
+                    || hasRole('ngo')
+                    || hasRole('volunteer')
+                    || isAdmin();
+      allow delete: if (hasRole('donor') && resource.data.donorId == request.auth.uid && resource.data.status == 'draft') || isAdmin();
+    }
+
+    // Match recommendations
+    match /matches/{matchId} {
+      allow read: if isAuthenticated();
+      // Only system / admin / assigned NGO can update response
+      allow create: if isAdmin();
+      allow update: if (hasRole('ngo') && request.auth.uid == resource.data.selectedNgoId) || isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    // Dispatches
+    match /dispatches/{dispatchId} {
+      allow read: if isAuthenticated();
+      allow create: if isAdmin() || hasRole('ngo');
+      // Volunteers can update their dispatch progress and upload proof of delivery
+      allow update: if (hasRole('volunteer') && request.auth.uid == resource.data.volunteerId) || isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    // Impact & Analytics events
+    match /impact_events/{eventId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+  }
+}
